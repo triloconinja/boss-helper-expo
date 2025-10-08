@@ -1,5 +1,5 @@
-// App_old.tsx
-import React, { useMemo, useState, createContext, useContext } from 'react';
+// App.tsx
+import React, { useMemo, useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   useFonts,
@@ -19,10 +19,14 @@ import {
   Pressable,
   Text,
   StyleSheet,
+  Alert,
+  Modal,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { enableScreens } from 'react-native-screens';
 import { Ionicons } from '@expo/vector-icons';
+import * as Linking from 'expo-linking';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { COLORS } from './src/theme';
 import Dashboard from './src/screens/Dashboard';
@@ -32,8 +36,9 @@ import Profile from './src/screens/Profile';
 import Households from './src/screens/Households';
 import Grocery from './src/screens/Grocery';
 import Activities from './src/screens/Activities';
-import AuthLinkHandler from './src/utils/AuthLinkHandler';
 import Login from './src/screens/Login';
+import { supabase } from './src/supabase';
+import { MenuProvider, useMenu } from './src/context/MenuProvider';
 
 enableScreens(true);
 
@@ -51,91 +56,148 @@ type RootStackParamList = {
   Login: undefined;
 };
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+const AppStackNav = createNativeStackNavigator<RootStackParamList>();
+const AuthStackNav = createNativeStackNavigator();
 
-/* ---------------- More Menu Context ---------------- */
-const MenuCtx = createContext<{ open: boolean; setOpen: (v: boolean) => void }>({
-  open: false,
-  setOpen: () => {},
-});
-function useMenu() {
-  return useContext(MenuCtx);
+/* ---------------- Supabase Link & Auth Listener ---------------- */
+function useSupabaseLinking(onLoggedIn?: () => void) {
+  useEffect(() => {
+    const handleUrl = async ({ url }: { url: string }) => {
+      try {
+        const parsed = Linking.parse(url);
+        const code = (parsed.queryParams as Record<string, string> | undefined)?.code;
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+          onLoggedIn?.();
+          return;
+        }
+
+        const hash = url.split('#')[1];
+        if (!hash) return;
+        const params = Object.fromEntries(new URLSearchParams(hash));
+        const access_token = params['access_token'];
+        const refresh_token = params['refresh_token'];
+        if (access_token && refresh_token) {
+          const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+          if (error) throw error;
+          onLoggedIn?.();
+        }
+      } catch (e: any) {
+        Alert.alert('Login Error', e?.message ?? 'Unable to complete login.');
+      }
+    };
+
+    const sub = Linking.addEventListener('url', handleUrl);
+    (async () => {
+      const initial = await Linking.getInitialURL();
+      if (initial) await handleUrl({ url: initial });
+    })();
+
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) onLoggedIn?.();
+    });
+
+    return () => {
+      sub.remove();
+      authSub.subscription.unsubscribe();
+    };
+  }, [onLoggedIn]);
 }
 
-/* ---------------- Top-right Pop Menu (PRESET B: Dark) ---------------- */
-function MoreMenuOverlay({
-  navTo,
-}: {
-  navTo: (route: keyof RootStackParamList) => void;
-}) {
+/* ---------------- Logout Helper ---------------- */
+async function handleLogout() {
+  try {
+    await supabase.auth.signOut();
+    const keys = await AsyncStorage.getAllKeys();
+    const supabaseKeys = keys.filter((k) => k.startsWith('sb-'));
+    if (supabaseKeys.length) await AsyncStorage.multiRemove(supabaseKeys);
+  } catch (e) {
+    console.log('Logout error', e);
+  }
+}
+
+/* ---------------- Modal Popup Menu ---------------- */
+function MoreMenuOverlay({ navTo }: { navTo: (r: keyof RootStackParamList) => void }) {
   const { open, setOpen } = useMenu();
   const insets = useSafeAreaInsets();
-  if (!open) return null;
-
-  const go = (route: keyof RootStackParamList) => {
-    setOpen(false);
-    navTo(route);
-  };
-
-  // Preset B (dark) theme
   const theme = {
     cardBg: '#22262B',
     border: 'rgba(255,255,255,0.15)',
     divider: 'rgba(255,255,255,0.12)',
     text: '#FFFFFF',
     icon: '#FFFFFF',
-    shadowColor: '#000',
+  };
+
+  const go = (route: keyof RootStackParamList) => {
+    setOpen(false);
+    navTo(route);
+  };
+
+  const logout = async () => {
+    setOpen(false);
+    await handleLogout();
   };
 
   return (
-    <Pressable onPress={() => setOpen(false)} style={styles.menuBackdrop}>
-      <View
-        style={[
-          styles.menuCardBase,
-          {
-            top: insets.top + 10,
-            right: 20, // align with 20px page/card margin
-            backgroundColor: theme.cardBg,
-            borderColor: theme.border,
-            shadowColor: theme.shadowColor,
-          },
-        ]}
-      >
-        {[
-          { label: 'Grocery', icon: 'cart-outline', route: 'Grocery' as const },
-          { label: 'Households', icon: 'business-outline', route: 'Households' as const },
-          { label: 'Activities', icon: 'time-outline', route: 'Activities' as const },
-          { label: 'Profile', icon: 'person-outline', route: 'Profile' as const },
-          { label: 'Login', icon: 'log-in-outline', route: 'Login' as const },
-        ].map((item, i) => (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <Pressable style={styles.menuBackdrop} onPress={() => setOpen(false)}>
+        <View
+          style={[
+            styles.menuCardBase,
+            {
+              top: insets.top + 10,
+              right: 20,
+              backgroundColor: theme.cardBg,
+              borderColor: theme.border,
+              position: 'absolute',
+            },
+          ]}
+          onStartShouldSetResponder={() => true}
+        >
+          {[
+            { label: 'Grocery', icon: 'cart-outline', route: 'Grocery' as const },
+            { label: 'Households', icon: 'business-outline', route: 'Households' as const },
+            { label: 'Activities', icon: 'time-outline', route: 'Activities' as const },
+            { label: 'Profile', icon: 'person-outline', route: 'Profile' as const },
+          ].map((item, i) => (
+            <Pressable
+              key={item.route}
+              onPress={() => go(item.route)}
+              style={[styles.menuRow, i !== 0 && { borderTopColor: theme.divider }]}
+            >
+              <Ionicons name={item.icon as any} size={20} color={theme.icon} />
+              <Text style={[styles.menuRowText, { color: theme.text }]}>{item.label}</Text>
+            </Pressable>
+          ))}
+
+          {/* Logout Item */}
           <Pressable
-            key={item.route}
-            onPress={() => go(item.route)}
-            style={[styles.menuRow, i !== 0 && { borderTopColor: theme.divider }]}
+            onPress={logout}
+            style={[styles.menuRow, { borderTopColor: theme.divider, borderTopWidth: StyleSheet.hairlineWidth }]}
           >
-            <Ionicons name={item.icon as any} size={20} color={theme.icon} />
-            <Text style={[styles.menuRowText, { color: theme.text }]}>{item.label}</Text>
+            <Ionicons name="log-out-outline" size={20} color="#FF5555" />
+            <Text style={[styles.menuRowText, { color: '#FF5555' }]}>Logout</Text>
           </Pressable>
-        ))}
-      </View>
-    </Pressable>
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
-/* ---------------- Fixed Bottom "StatCard" Bar ---------------- */
+/* ---------------- Bottom Bar ---------------- */
 function BottomStatBar({
   active,
   onHome,
   onCalendar,
   onTasks,
-  onMore,
 }: {
   active: keyof RootStackParamList | string;
   onHome: () => void;
   onCalendar: () => void;
   onTasks: () => void;
-  onMore: () => void;
 }) {
+  const { setOpen } = useMenu();
   const insets = useSafeAreaInsets();
   const isActive = (name: string) => String(active) === name;
 
@@ -160,7 +222,6 @@ function BottomStatBar({
           color={isActive('Home') ? BLUE : GRAY}
         />
       </Pressable>
-
       <Pressable style={styles.statBarItem} onPress={onCalendar}>
         <Ionicons
           name={(isActive('Calendar') ? 'calendar' : 'calendar-outline') as any}
@@ -168,7 +229,6 @@ function BottomStatBar({
           color={isActive('Calendar') ? BLUE : GRAY}
         />
       </Pressable>
-
       <Pressable style={styles.statBarItem} onPress={onTasks}>
         <Ionicons
           name={(isActive('Tasks') ? 'checkbox' : 'checkbox-outline') as any}
@@ -176,13 +236,76 @@ function BottomStatBar({
           color={isActive('Tasks') ? BLUE : GRAY}
         />
       </Pressable>
-
-      {/* More = bell icon triggers popup */}
-      <Pressable style={styles.statBarItem} onPress={onMore}>
+      <Pressable style={styles.statBarItem} onPress={() => setOpen(true)}>
         <Ionicons name="notifications-outline" size={24} color={GRAY} />
       </Pressable>
     </View>
   );
+}
+
+/* ---------------- App Stacks ---------------- */
+function AppStack() {
+  return (
+    <AppStackNav.Navigator screenOptions={{ headerShown: false }}>
+      <AppStackNav.Screen name="Home" component={Dashboard} />
+      <AppStackNav.Screen name="Calendar" component={CalendarView} />
+      <AppStackNav.Screen name="Tasks" component={Tasks} />
+      <AppStackNav.Screen name="Grocery" component={Grocery} />
+      <AppStackNav.Screen name="Households" component={Households} />
+      <AppStackNav.Screen name="Activities" component={Activities} />
+      <AppStackNav.Screen name="Profile" component={Profile} />
+    </AppStackNav.Navigator>
+  );
+}
+
+function AuthStack() {
+  return (
+    <AuthStackNav.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStackNav.Screen name="Login" component={Login} />
+    </AuthStackNav.Navigator>
+  );
+}
+
+/* ---------------- AuthGate ---------------- */
+function AuthGate({
+  childrenWhenAuthed,
+  onLoggedIn,
+}: {
+  childrenWhenAuthed: React.ReactNode;
+  onLoggedIn: () => void;
+}) {
+  const [checking, setChecking] = useState(true);
+  const [isAuthed, setIsAuthed] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      setIsAuthed(!!data.session);
+      setChecking(false);
+    })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthed(!!session);
+      if (session) onLoggedIn();
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [onLoggedIn]);
+
+  if (checking) {
+    return (
+      <View style={{ flex: 1, backgroundColor: COLORS.bg, alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
+  return isAuthed ? <>{childrenWhenAuthed}</> : <AuthStack />;
 }
 
 /* ---------------- Root App ---------------- */
@@ -192,10 +315,11 @@ export default function App() {
     Montserrat_500Medium,
     Montserrat_700Bold,
   });
-  const [open, setOpen] = useState(false);
   const [currentRoute, setCurrentRoute] = useState<keyof RootStackParamList | string>('Home');
-
   const navRef = useNavigationContainerRef<RootStackParamList>();
+
+  const onLoggedIn = () => {};
+  useSupabaseLinking(onLoggedIn);
 
   const navTheme = useMemo(
     () => ({
@@ -221,11 +345,10 @@ export default function App() {
   }
 
   const navTo = (route: keyof RootStackParamList) => navRef.current?.navigate(route);
-  const handleMore = () => setOpen(true);
 
   return (
     <SafeAreaProvider>
-      <MenuCtx.Provider value={{ open, setOpen }}>
+      <MenuProvider>
         <NavigationContainer
           ref={navRef}
           theme={navTheme}
@@ -233,43 +356,32 @@ export default function App() {
           onStateChange={() => setCurrentRoute(navRef.getCurrentRoute()?.name ?? 'Home')}
         >
           <StatusBar style="light" translucent={false} />
-          <AuthLinkHandler />
 
-          <Stack.Navigator screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="Home" component={Dashboard} />
-            <Stack.Screen name="Calendar" component={CalendarView} />
-            <Stack.Screen name="Tasks" component={Tasks} />
-            {/* deep pages opened from More */}
-            <Stack.Screen name="Grocery" component={Grocery} />
-            <Stack.Screen name="Households" component={Households} />
-            <Stack.Screen name="Activities" component={Activities} />
-            <Stack.Screen name="Profile" component={Profile} />
-            <Stack.Screen name="Login" component={Login} />
-          </Stack.Navigator>
-
-          {/* Fixed bottom bar (same width as cards), icons only */}
-          <BottomStatBar
-            active={currentRoute}
-            onHome={() => navTo('Home')}
-            onCalendar={() => navTo('Calendar')}
-            onTasks={() => navTo('Tasks')}
-            onMore={handleMore}
+          <AuthGate
+            onLoggedIn={onLoggedIn}
+            childrenWhenAuthed={
+              <>
+                <AppStack />
+                <BottomStatBar
+                  active={currentRoute}
+                  onHome={() => navTo('Home')}
+                  onCalendar={() => navTo('Calendar')}
+                  onTasks={() => navTo('Tasks')}
+                />
+                <MoreMenuOverlay navTo={navTo} />
+              </>
+            }
           />
-
-          {/* Top-right pop menu */}
-          <MoreMenuOverlay navTo={navTo} />
         </NavigationContainer>
-      </MenuCtx.Provider>
+      </MenuProvider>
     </SafeAreaProvider>
   );
 }
 
 /* ---------------- Styles ---------------- */
 const styles = StyleSheet.create({
-  // Popup overlay + card (Dark preset)
   menuBackdrop: {
-    position: 'absolute',
-    left: 0, right: 0, top: 0, bottom: 0,
+    flex: 1,
     backgroundColor: 'rgba(0,0,0,0.20)',
   },
   menuCardBase: {
@@ -295,8 +407,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Montserrat_500Medium',
     fontSize: 16,
   },
-
-  // Bottom "stat card" bar
   statBar: {
     position: 'absolute',
     backgroundColor: '#FFFFFF',
@@ -306,7 +416,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
     elevation: 8,
-
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
