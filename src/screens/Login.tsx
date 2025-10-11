@@ -1,24 +1,38 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { TextInput, Pressable, Text, View, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import {
+  TextInput,
+  Pressable,
+  Text,
+  View,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
 import Screen from '../components/Screens';
 import { COLORS } from '../theme';
 import { supabase } from '../supabase';
 
 export default function Login() {
-  const [email, setEmail] = useState('');
   const [phase, setPhase] = useState<'request' | 'verify'>('request');
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // 6-digit code
-  const [code, setCode] = useState('');
-  const [seconds, setSeconds] = useState(60); // resend cooldown
+  // resend cooldown
+  const [seconds, setSeconds] = useState(60);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Start/stop timer when entering/exiting verify phase
   useEffect(() => {
-    if (phase !== 'verify') return;
-    // start countdown when we enter verify phase
-    setSeconds(60);
+    if (phase !== 'verify') {
+      timerRef.current && clearInterval(timerRef.current);
+      setSeconds(60);
+      return;
+    }
     timerRef.current && clearInterval(timerRef.current);
+    setSeconds(60);
     timerRef.current = setInterval(() => {
       setSeconds((s) => {
         if (s <= 1) {
@@ -28,13 +42,12 @@ export default function Login() {
         return s - 1;
       });
     }, 1000);
-
     return () => {
       timerRef.current && clearInterval(timerRef.current);
     };
   }, [phase]);
 
-  async function sendCode() {
+  const sendCode = useCallback(async () => {
     const e = email.trim();
     if (!e) {
       Alert.alert('Email required', 'Please enter your email address.');
@@ -44,21 +57,18 @@ export default function Login() {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email: e,
-        options: {
-          shouldCreateUser: true, // allow sign-up on first try
-        },
+        options: { shouldCreateUser: true },
       });
       if (error) throw error;
       setPhase('verify');
-      Alert.alert('Code sent', 'Check your email for the 6-digit code.');
     } catch (err: any) {
       Alert.alert('Error', err?.message ?? 'Failed to send code.');
     } finally {
       setLoading(false);
     }
-  }
+  }, [email]);
 
-  async function verifyCode() {
+  const verifyCode = useCallback(async () => {
     const e = email.trim();
     const t = code.trim();
     if (t.length !== 6) {
@@ -70,98 +80,107 @@ export default function Login() {
       const { error } = await supabase.auth.verifyOtp({
         email: e,
         token: t,
-        type: 'email', // email magic code
+        type: 'email',
       });
       if (error) throw error;
-
-      // Optional cleanup: reset form for next time.
-      setPhase('request');
-      setCode('');
-      // No manual navigation needed — AuthGate will switch to the app automatically.
+      // AuthGate should take over on success
     } catch (err: any) {
       Alert.alert('Verify failed', err?.message ?? 'The code is incorrect or expired.');
     } finally {
       setLoading(false);
     }
-  }
+  }, [email, code]);
 
-  async function resendCode() {
+  const resendCode = useCallback(async () => {
     if (seconds > 0) return;
     await sendCode();
-  }
+  }, [seconds, sendCode]);
 
   const onChangeCode = (v: string) => {
-    const cleaned = v.replace(/[^0-9]/g, '').slice(0, 6);
-    setCode(cleaned);
+    setCode(v.replace(/[^0-9]/g, '').slice(0, 6));
   };
 
   return (
     <Screen topGutter={24}>
-      <Text style={styles.h1}>Login</Text>
-      <View style={{ height: 16 }} />
-
-      {phase === 'request' && (
-        <>
-          <TextInput
-            placeholder="Email"
-            placeholderTextColor="#9AA0A6"
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-            style={styles.input}
-            editable={!loading}
-          />
-          <View style={{ height: 16 }} />
-          <Pressable style={[styles.btn, loading && { opacity: 0.6 }]} onPress={sendCode} disabled={loading}>
-            <Text style={styles.btnText}>{loading ? 'Sending…' : 'Send 6-digit Code'}</Text>
-          </Pressable>
-        </>
-      )}
-
-      {phase === 'verify' && (
-        <>
-          <Text style={styles.subtle}>We sent a 6-digit code to</Text>
-          <Text style={styles.email}>{email}</Text>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.h1}>Login</Text>
           <View style={{ height: 12 }} />
-          <TextInput
-            placeholder="Enter 6-digit code"
-            placeholderTextColor="#9AA0A6"
-            value={code}
-            onChangeText={onChangeCode}
-            keyboardType="number-pad"
-            style={styles.input}
-            maxLength={6}
-            editable={!loading}
-          />
-          <View style={{ height: 16 }} />
-          <Pressable style={[styles.btn, loading && { opacity: 0.6 }]} onPress={verifyCode} disabled={loading}>
-            <Text style={styles.btnText}>{loading ? 'Verifying…' : 'Verify & Sign In'}</Text>
-          </Pressable>
+          <Text style={styles.subtle}>Welcome back! Sign in with a one-time code sent to your email.</Text>
+          <View style={{ height: 24 }} />
 
-          <View style={{ height: 12 }} />
-          <Text style={styles.resendRow}>
-            Didn’t get it?{' '}
-            <Text
-              onPress={resendCode}
-              style={[styles.resendLink, seconds > 0 && { opacity: 0.5 }]}
-              suppressHighlighting
-            >
-              Resend{seconds > 0 ? ` (${seconds})` : ''}
-            </Text>
-          </Text>
+          {phase === 'request' && (
+            <>
+              <Text style={styles.label}>Email address</Text>
+              <TextInput
+                placeholder="you@example.com"
+                placeholderTextColor="#9AA0A6"
+                value={email}
+                onChangeText={setEmail}
+                autoCapitalize="none"
+                keyboardType="email-address"
+                style={styles.input}
+                editable={!loading}
+              />
+              <View style={{ height: 16 }} />
+              <Pressable style={[styles.btnPrimary, loading && { opacity: 0.6 }]} onPress={sendCode} disabled={loading}>
+                <Text style={styles.btnPrimaryTxt}>{loading ? 'Sending…' : 'Send 6-digit code'}</Text>
+              </Pressable>
+            </>
+          )}
 
-          <View style={{ height: 12 }} />
-          <Pressable
-            onPress={() => {
-              setPhase('request');
-              setCode('');
-            }}
-          >
-            <Text style={styles.changeEmail}>Use a different email</Text>
-          </Pressable>
-        </>
-      )}
+          {phase === 'verify' && (
+            <>
+              <Text style={styles.subtle}>
+                We sent a 6-digit code to{' '}
+                <Text style={{ color: COLORS.text, fontFamily: 'Montserrat_700Bold' }}>{email}</Text>
+              </Text>
+              <View style={{ height: 12 }} />
+              <Text style={styles.label}>Enter code</Text>
+              <TextInput
+                placeholder="123456"
+                placeholderTextColor="#9AA0A6"
+                value={code}
+                onChangeText={onChangeCode}
+                keyboardType="number-pad"
+                maxLength={6}
+                style={styles.input}
+                editable={!loading}
+              />
+              <View style={{ height: 16 }} />
+              <Pressable style={[styles.btnLime, loading && { opacity: 0.6 }]} onPress={verifyCode} disabled={loading}>
+                <Text style={styles.btnLimeTxt}>{loading ? 'Verifying…' : 'Verify & Sign in'}</Text>
+              </Pressable>
+
+              <View style={{ height: 12 }} />
+              <Text style={styles.resendRow}>
+                Didn’t get it?{' '}
+                <Text
+                  onPress={resendCode}
+                  style={[styles.resendLink, seconds > 0 && { opacity: 0.5 }]}
+                  suppressHighlighting
+                >
+                  Resend{seconds > 0 ? ` (${seconds})` : ''}
+                </Text>
+              </Text>
+
+              <View style={{ height: 12 }} />
+              <Pressable
+                onPress={() => {
+                  setPhase('request');
+                  setCode('');
+                }}
+              >
+                <Text style={styles.changeEmail}>Use a different email</Text>
+              </Pressable>
+            </>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
@@ -177,9 +196,11 @@ const styles = StyleSheet.create({
     color: '#9AA0A6',
     fontFamily: 'Montserrat_400Regular',
   },
-  email: {
-    color: COLORS.text,
+  label: {
+    color: '#E6EAF0',
     fontFamily: 'Montserrat_700Bold',
+    marginTop: 6,
+    marginBottom: 6,
   },
   input: {
     height: 52,
@@ -192,15 +213,27 @@ const styles = StyleSheet.create({
     fontFamily: 'Montserrat_500Medium',
     letterSpacing: 1,
   },
-  btn: {
+  btnPrimary: {
     height: 56,
     borderRadius: 16,
     backgroundColor: '#0268EE',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnText: {
+  btnPrimaryTxt: {
     color: '#fff',
+    fontFamily: 'Montserrat_700Bold',
+    fontSize: 16,
+  },
+  btnLime: {
+    height: 56,
+    borderRadius: 16,
+    backgroundColor: '#D6F031',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnLimeTxt: {
+    color: '#000',
     fontFamily: 'Montserrat_700Bold',
     fontSize: 16,
   },
