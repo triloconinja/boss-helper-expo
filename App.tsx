@@ -27,6 +27,7 @@ import { enableScreens } from 'react-native-screens';
 import { Ionicons } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { PortalProvider, Portal, PortalHost } from '@gorhom/portal';
 
 import { COLORS } from './src/theme';
 import Dashboard from './src/screens/Dashboard';
@@ -38,7 +39,7 @@ import Grocery from './src/screens/Grocery';
 import Activities from './src/screens/Activities';
 import Login from './src/screens/Login';
 import { supabase } from './src/supabase';
-import { MenuProvider, useMenu } from './src/context/MenuProvider';
+import { ToastProvider } from './src/components/ToastProvider';
 
 enableScreens(true);
 
@@ -59,7 +60,7 @@ type RootStackParamList = {
 const AppStackNav = createNativeStackNavigator<RootStackParamList>();
 const AuthStackNav = createNativeStackNavigator();
 
-/* ---------------- Supabase Link & Auth Listener ---------------- */
+/* ---------------- Supabase deep-link auth ---------------- */
 function useSupabaseLinking(onLoggedIn?: () => void) {
   useEffect(() => {
     const handleUrl = async ({ url }: { url: string }) => {
@@ -72,7 +73,6 @@ function useSupabaseLinking(onLoggedIn?: () => void) {
           onLoggedIn?.();
           return;
         }
-
         const hash = url.split('#')[1];
         if (!hash) return;
         const params = Object.fromEntries(new URLSearchParams(hash));
@@ -105,7 +105,7 @@ function useSupabaseLinking(onLoggedIn?: () => void) {
   }, [onLoggedIn]);
 }
 
-/* ---------------- Logout Helper ---------------- */
+/* ---------------- Logout (clears local session) ---------------- */
 async function handleLogout() {
   try {
     await supabase.auth.signOut();
@@ -117,133 +117,150 @@ async function handleLogout() {
   }
 }
 
-/* ---------------- Modal Popup Menu ---------------- */
-function MoreMenuOverlay({ navTo }: { navTo: (r: keyof RootStackParamList) => void }) {
-  const { open, setOpen } = useMenu();
+/* ---------------- Popup Menu ---------------- */
+function PopupMenu({
+  visible,
+  onClose,
+  onNavigate,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onNavigate: (r: keyof RootStackParamList) => void;
+}) {
   const insets = useSafeAreaInsets();
-  const theme = {
-    cardBg: '#22262B',
-    border: 'rgba(255,255,255,0.15)',
-    divider: 'rgba(255,255,255,0.12)',
-    text: '#FFFFFF',
-    icon: '#FFFFFF',
-  };
-
-  const go = (route: keyof RootStackParamList) => {
-    setOpen(false);
-    navTo(route);
-  };
-
-  const logout = async () => {
-    setOpen(false);
-    await handleLogout();
-  };
+  if (!visible) return null;
 
   return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-      <Pressable style={styles.menuBackdrop} onPress={() => setOpen(false)}>
-        <View
-          style={[
-            styles.menuCardBase,
-            {
-              top: insets.top + 10,
-              right: 20,
-              backgroundColor: theme.cardBg,
-              borderColor: theme.border,
-              position: 'absolute',
-            },
-          ]}
-          onStartShouldSetResponder={() => true}
-        >
-          {[
-            { label: 'Grocery', icon: 'cart-outline', route: 'Grocery' as const },
-            { label: 'Households', icon: 'business-outline', route: 'Households' as const },
-            { label: 'Activities', icon: 'time-outline', route: 'Activities' as const },
-            { label: 'Profile', icon: 'person-outline', route: 'Profile' as const },
-          ].map((item, i) => (
-            <Pressable
-              key={item.route}
-              onPress={() => go(item.route)}
-              style={[styles.menuRow, i !== 0 && { borderTopColor: theme.divider }]}
-            >
-              <Ionicons name={item.icon as any} size={20} color={theme.icon} />
-              <Text style={[styles.menuRowText, { color: theme.text }]}>{item.label}</Text>
-            </Pressable>
-          ))}
-
-          {/* Logout Item */}
-          <Pressable
-            onPress={logout}
-            style={[styles.menuRow, { borderTopColor: theme.divider, borderTopWidth: StyleSheet.hairlineWidth }]}
+    <Portal>
+      <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+        <Pressable style={styles.menuBackdrop} onPress={onClose}>
+          <View
+            style={[
+              styles.menuCardBase,
+              {
+                top: insets.top + 10,
+                right: 20,
+                backgroundColor: '#22262B',
+                borderColor: 'rgba(255,255,255,0.15)',
+                position: 'absolute',
+                zIndex: 999,
+              },
+            ]}
+            onStartShouldSetResponder={() => true}
           >
-            <Ionicons name="log-out-outline" size={20} color="#FF5555" />
-            <Text style={[styles.menuRowText, { color: '#FF5555' }]}>Logout</Text>
-          </Pressable>
-        </View>
-      </Pressable>
-    </Modal>
+            {[
+              { label: 'Grocery', icon: 'cart-outline', route: 'Grocery' as const },
+              { label: 'Households', icon: 'business-outline', route: 'Households' as const },
+              { label: 'Activities', icon: 'time-outline', route: 'Activities' as const },
+              { label: 'Profile', icon: 'person-outline', route: 'Profile' as const },
+            ].map((item, i) => (
+              <Pressable
+                key={item.route}
+                onPress={() => {
+                  onNavigate(item.route);
+                  onClose();
+                }}
+                style={[
+                  styles.menuRow,
+                  i !== 0 && {
+                    borderTopColor: 'rgba(255,255,255,0.12)',
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                  },
+                ]}
+              >
+                <Ionicons name={item.icon as any} size={20} color="#fff" />
+                <Text style={[styles.menuRowText, { color: '#fff' }]}>{item.label}</Text>
+              </Pressable>
+            ))}
+
+            <Pressable
+              onPress={async () => {
+                await handleLogout();
+                onClose();
+              }}
+              style={[
+                styles.menuRow,
+                {
+                  borderTopColor: 'rgba(255,255,255,0.12)',
+                  borderTopWidth: StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <Ionicons name="log-out-outline" size={20} color="#FF5555" />
+              <Text style={[styles.menuRowText, { color: '#FF5555' }]}>Logout</Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+    </Portal>
   );
 }
 
 /* ---------------- Bottom Bar ---------------- */
-function BottomStatBar({
+function BottomPortalBar({
   active,
   onHome,
   onCalendar,
   onTasks,
+  onMenu,
 }: {
-  active: keyof RootStackParamList | string;
+  active: string;
   onHome: () => void;
   onCalendar: () => void;
   onTasks: () => void;
+  onMenu: () => void;
 }) {
-  const { setOpen } = useMenu();
-  const insets = useSafeAreaInsets();
   const isActive = (name: string) => String(active) === name;
 
   return (
-    <View
-      style={[
-        styles.statBar,
-        {
-          left: 20,
-          right: 20,
-          bottom: 18,
-          height: 56 + (insets.bottom || 0),
-          paddingTop: 10,
-          paddingBottom: Math.max(10, insets.bottom ? 10 : 8),
-        },
-      ]}
-    >
-      <Pressable style={styles.statBarItem} onPress={onHome}>
-        <Ionicons
-          name={(isActive('Home') ? 'home' : 'home-outline') as any}
-          size={24}
-          color={isActive('Home') ? BLUE : GRAY}
-        />
-      </Pressable>
-      <Pressable style={styles.statBarItem} onPress={onCalendar}>
-        <Ionicons
-          name={(isActive('Calendar') ? 'calendar' : 'calendar-outline') as any}
-          size={24}
-          color={isActive('Calendar') ? BLUE : GRAY}
-        />
-      </Pressable>
-      <Pressable style={styles.statBarItem} onPress={onTasks}>
-        <Ionicons
-          name={(isActive('Tasks') ? 'checkbox' : 'checkbox-outline') as any}
-          size={24}
-          color={isActive('Tasks') ? BLUE : GRAY}
-        />
-      </Pressable>
-      <Pressable style={styles.statBarItem} onPress={() => setOpen(true)}>
-        <Ionicons name="notifications-outline" size={24} color={GRAY} />
-      </Pressable>
-    </View>
+    <Portal>
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.statBar,
+          {
+            left: 20,
+            right: 20,
+            bottom: 20,
+            height: 72, // ↑ taller bar
+            paddingTop: 12,
+            paddingBottom: 12,
+          },
+        ]}
+      >
+        <Pressable style={styles.statBarItem} onPress={onHome}>
+          <Ionicons
+            name={(isActive('Home') ? 'home' : 'home-outline') as any}
+            size={28}
+            color={isActive('Home') ? BLUE : GRAY}
+          />
+        </Pressable>
+
+        <Pressable style={styles.statBarItem} onPress={onCalendar}>
+          <Ionicons
+            name={(isActive('Calendar') ? 'calendar' : 'calendar-outline') as any}
+            size={28}
+            color={isActive('Calendar') ? BLUE : GRAY}
+          />
+        </Pressable>
+
+        <Pressable style={styles.statBarItem} onPress={onTasks}>
+          <Ionicons
+            name={(isActive('Tasks') ? 'checkbox' : 'checkbox-outline') as any}
+            size={28}
+            color={isActive('Tasks') ? BLUE : GRAY}
+          />
+        </Pressable>
+
+        <Pressable style={styles.statBarItem} onPress={onMenu}>
+          <Ionicons name="notifications-outline" size={28} color={GRAY} />
+        </Pressable>
+      </View>
+    </Portal>
   );
 }
 
-/* ---------------- App Stacks ---------------- */
+/* ---------------- Stacks ---------------- */
 function AppStack() {
   return (
     <AppStackNav.Navigator screenOptions={{ headerShown: false }}>
@@ -267,39 +284,40 @@ function AuthStack() {
 }
 
 /* ---------------- AuthGate ---------------- */
-function AuthGate({
-  childrenWhenAuthed,
-  onLoggedIn,
-}: {
-  childrenWhenAuthed: React.ReactNode;
-  onLoggedIn: () => void;
-}) {
+function AuthGate({ childrenWhenAuthed }: { childrenWhenAuthed: React.ReactNode }) {
   const [checking, setChecking] = useState(true);
   const [isAuthed, setIsAuthed] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const { data } = await supabase.auth.getSession();
+      const { data, error } = await supabase.auth.getSession();
       if (!mounted) return;
-      setIsAuthed(!!data.session);
+      if (error) console.log('getSession error', error);
+      setIsAuthed(!!data?.session);
       setChecking(false);
     })();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       setIsAuthed(!!session);
-      if (session) onLoggedIn();
     });
 
     return () => {
       mounted = false;
       sub.subscription.unsubscribe();
     };
-  }, [onLoggedIn]);
+  }, []);
 
   if (checking) {
     return (
-      <View style={{ flex: 1, backgroundColor: COLORS.bg, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: COLORS.bg,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
         <ActivityIndicator />
       </View>
     );
@@ -315,11 +333,11 @@ export default function App() {
     Montserrat_500Medium,
     Montserrat_700Bold,
   });
-  const [currentRoute, setCurrentRoute] = useState<keyof RootStackParamList | string>('Home');
+  const [currentRoute, setCurrentRoute] = useState('Home');
+  const [menuVisible, setMenuVisible] = useState(false);
   const navRef = useNavigationContainerRef<RootStackParamList>();
 
-  const onLoggedIn = () => {};
-  useSupabaseLinking(onLoggedIn);
+  useSupabaseLinking();
 
   const navTheme = useMemo(
     () => ({
@@ -338,7 +356,14 @@ export default function App() {
 
   if (!loaded) {
     return (
-      <View style={{ flex: 1, backgroundColor: COLORS.bg, alignItems: 'center', justifyContent: 'center' }}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: COLORS.bg,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
         <ActivityIndicator />
       </View>
     );
@@ -348,52 +373,51 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <MenuProvider>
-        <NavigationContainer
-          ref={navRef}
-          theme={navTheme}
-          onReady={() => setCurrentRoute(navRef.getCurrentRoute()?.name ?? 'Home')}
-          onStateChange={() => setCurrentRoute(navRef.getCurrentRoute()?.name ?? 'Home')}
-        >
-          <StatusBar style="light" translucent={false} />
-
-          <AuthGate
-            onLoggedIn={onLoggedIn}
-            childrenWhenAuthed={
-              <>
-                <AppStack />
-                <BottomStatBar
-                  active={currentRoute}
-                  onHome={() => navTo('Home')}
-                  onCalendar={() => navTo('Calendar')}
-                  onTasks={() => navTo('Tasks')}
-                />
-                <MoreMenuOverlay navTo={navTo} />
-              </>
-            }
-          />
-        </NavigationContainer>
-      </MenuProvider>
+      <PortalProvider>
+        <ToastProvider>
+          <NavigationContainer
+            ref={navRef}
+            theme={navTheme}
+            onReady={() => setCurrentRoute(navRef.getCurrentRoute()?.name ?? 'Home')}
+            onStateChange={() => setCurrentRoute(navRef.getCurrentRoute()?.name ?? 'Home')}
+          >
+            <StatusBar style="light" />
+            <AuthGate
+              childrenWhenAuthed={
+                <>
+                  <AppStack />
+                  <BottomPortalBar
+                    active={currentRoute}
+                    onHome={() => navTo('Home')}
+                    onCalendar={() => navTo('Calendar')}
+                    onTasks={() => navTo('Tasks')}
+                    onMenu={() => setMenuVisible(true)}
+                  />
+                  <PopupMenu
+                    visible={menuVisible}
+                    onClose={() => setMenuVisible(false)}
+                    onNavigate={navTo}
+                  />
+                  <PortalHost name="global-toast" />
+                </>
+              }
+            />
+          </NavigationContainer>
+        </ToastProvider>
+      </PortalProvider>
     </SafeAreaProvider>
   );
 }
 
 /* ---------------- Styles ---------------- */
 const styles = StyleSheet.create({
-  menuBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.20)',
-  },
+  menuBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.20)' },
   menuCardBase: {
     position: 'absolute',
     minWidth: 230,
     borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
-    shadowOpacity: 0.16,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 14,
   },
   menuRow: {
     flexDirection: 'row',
@@ -401,16 +425,12 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 14,
     paddingHorizontal: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  menuRowText: {
-    fontFamily: 'Montserrat_500Medium',
-    fontSize: 16,
-  },
+  menuRowText: { fontFamily: 'Montserrat_500Medium', fontSize: 16 },
   statBar: {
     position: 'absolute',
     backgroundColor: '#FFFFFF',
-    borderRadius: 30,
+    borderRadius: 36,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 12,
@@ -419,12 +439,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
   },
   statBarItem: {
     height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 56,
+    minWidth: 64,
   },
 });

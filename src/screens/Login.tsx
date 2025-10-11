@@ -35,49 +35,51 @@ export default function Login() {
   }, [phase]);
 
   async function sendCode() {
-    if (!email.trim()) {
+    const e = email.trim();
+    if (!e) {
       Alert.alert('Email required', 'Please enter your email address.');
       return;
     }
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
+        email: e,
         options: {
           shouldCreateUser: true, // allow sign-up on first try
-          // No emailRedirectTo needed for 6-digit code flow
         },
       });
       if (error) throw error;
-
       setPhase('verify');
       Alert.alert('Code sent', 'Check your email for the 6-digit code.');
-    } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to send code.');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'Failed to send code.');
     } finally {
       setLoading(false);
     }
   }
 
   async function verifyCode() {
-    if (code.trim().length !== 6) {
+    const e = email.trim();
+    const t = code.trim();
+    if (t.length !== 6) {
       Alert.alert('Invalid code', 'Please enter the 6-digit code.');
       return;
     }
     setLoading(true);
     try {
       const { error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: code.trim(),
+        email: e,
+        token: t,
         type: 'email', // email magic code
       });
       if (error) throw error;
 
-      // Success: your AuthGate / auth listener should now push to Home automatically.
-      // If you want an explicit success message:
-      // Alert.alert('Welcome', 'You are signed in!');
-    } catch (e: any) {
-      Alert.alert('Verify failed', e?.message ?? 'The code is incorrect or expired.');
+      // Optional cleanup: reset form for next time.
+      setPhase('request');
+      setCode('');
+      // No manual navigation needed — AuthGate will switch to the app automatically.
+    } catch (err: any) {
+      Alert.alert('Verify failed', err?.message ?? 'The code is incorrect or expired.');
     } finally {
       setLoading(false);
     }
@@ -130,6 +132,7 @@ export default function Login() {
             keyboardType="number-pad"
             style={styles.input}
             maxLength={6}
+            editable={!loading}
           />
           <View style={{ height: 16 }} />
           <Pressable style={[styles.btn, loading && { opacity: 0.6 }]} onPress={verifyCode} disabled={loading}>
@@ -151,7 +154,6 @@ export default function Login() {
           <View style={{ height: 12 }} />
           <Pressable
             onPress={() => {
-              // go back to request phase / change email
               setPhase('request');
               setCode('');
             }}
