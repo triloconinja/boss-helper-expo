@@ -33,9 +33,11 @@ type DbTask = {
   due_at: string | null;
   completed?: boolean | null;
 };
+
 type UiTask = {
   id: string;
   title: string;
+  date: string;            // 👈 NEW
   time: string;
   done: boolean;
   createdIndex: number;
@@ -52,6 +54,17 @@ function toTime12(dueISO: string | null): string {
   if (h === 0) h = 12;
   const mm = `${m}`.padStart(2, '0');
   return `${h}:${mm} ${ap}`;
+}
+
+// e.g. "Sat, Oct 11"
+function toDateShort(dueISO: string | null): string {
+  if (!dueISO) return '';
+  const d = new Date(dueISO);
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 export default function Tasks() {
@@ -88,6 +101,7 @@ export default function Tasks() {
       const mapped: UiTask[] = (data ?? []).map((t: DbTask, idx: number) => ({
         id: t.id,
         title: t.title,
+        date: toDateShort(t.due_at),           // 👈 NEW
         time: toTime12(t.due_at),
         done: !!t.completed,
         createdIndex: idx,
@@ -177,6 +191,9 @@ function Row({ task, index, onToggle }: { task: UiTask; index: number; onToggle:
   const titleColor = task.done ? COLORS.textMuted : '#000';
   const timeColor = task.done ? '#8C96A2' : 'rgba(0,0,0,0.7)';
 
+  const dateTime =
+    task.date && task.time ? `${task.date} • ${task.time}` : (task.date || task.time || '');
+
   return (
     <Animated.View
       style={[
@@ -203,7 +220,7 @@ function Row({ task, index, onToggle }: { task: UiTask; index: number; onToggle:
 
       <View style={{ flex: 1 }}>
         <Text style={[styles.title, { color: titleColor }]} numberOfLines={1}>{task.title}</Text>
-        {!!task.time && <Text style={[styles.time, { color: timeColor }]} numberOfLines={1}>{task.time}</Text>}
+        {!!dateTime && <Text style={[styles.time, { color: timeColor }]} numberOfLines={1}>{dateTime}</Text>}
       </View>
     </Animated.View>
   );

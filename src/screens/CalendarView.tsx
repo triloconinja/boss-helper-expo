@@ -5,6 +5,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { COLORS } from '../theme';
 import Calendar, { CalendarEvent } from '../components/Calendar';
 import { supabase } from '../supabase';
+import type { TaskSubmitPayload } from '../components/TaskModal';
 
 type Member = { id: string; name: string };
 type Household = { id: string; name: string };
@@ -14,21 +15,28 @@ function ymd(d: Date) {
   const day = `${d.getDate()}`.padStart(2, '0');
   return `${d.getFullYear()}-${m}-${day}`;
 }
-function time12ToISO(dateYMD: string, time12?: string): string {
-  const t = (time12 ?? '9:00 AM').trim().toUpperCase();
-  const m = t.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
-  if (!m) return new Date(`${dateYMD}T09:00:00`).toISOString();
-  let hour = parseInt(m[1], 10) % 12;
-  if (m[3] === 'PM') hour += 12;
-  const dt = new Date(`${dateYMD}T00:00:00`);
-  dt.setHours(hour, parseInt(m[2], 10), 0, 0);
-  return dt.toISOString();
+function todayYMD() { return ymd(new Date()); }
+
+/** Build a local date from Y-M-D and hour:minute and return ISO string. */
+function buildISO(dateYMD: string, hour: number, minute: number): string {
+  const [y, mo, d] = dateYMD.split('-').map(Number);
+  const local = new Date(y, (mo ?? 1) - 1, d ?? 1, hour, minute, 0, 0);
+  return local.toISOString();
 }
-function todayYMD() {
-  const d = new Date();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  const day = `${d.getDate()}`.padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
+function timeFromPayload(p: TaskSubmitPayload): { hour: number; minute: number } {
+  if (p.timeHHmm) {
+    const m = p.timeHHmm.match(/^(\d{1,2}):(\d{2})$/);
+    if (m) return { hour: parseInt(m[1], 10), minute: parseInt(m[2], 10) };
+  }
+  if (p.time12h) {
+    const m = p.time12h.toUpperCase().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/);
+    if (m) {
+      let hour = parseInt(m[1], 10) % 12;
+      if (m[3] === 'PM') hour += 12;
+      return { hour, minute: parseInt(m[2], 10) };
+    }
+  }
+  return { hour: 9, minute: 0 };
 }
 
 async function ensureTaskList(householdId: string, forDateYMD: string) {
@@ -51,7 +59,7 @@ async function ensureTaskList(householdId: string, forDateYMD: string) {
 }
 
 export default function CalendarView() {
-  const nav = useNavigation();
+  const nav = useNavigation(); // ✅ hook at top level
 
   const [households, setHouseholds] = useState<Household[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -65,36 +73,17 @@ export default function CalendarView() {
 
   const loadHouseholds = useCallback(async () => {
     const { data, error } = await supabase.from('households').select('id,name').order('name');
-    if (error) {
-      console.log('Load households error', error);
-      setHouseholds([]);
-      return;
-    }
+    if (error) { console.log('Load households error', error); setHouseholds([]); return; }
     setHouseholds((data ?? []) as Household[]);
   }, []);
 
-  // two-step load (no FK join needed)
   const loadMembers = useCallback(async () => {
     const { data: mems, error: mErr } = await supabase.from('memberships').select('user_id').order('user_id');
-    if (mErr) {
-      console.log('Load members error (memberships)', mErr);
-      setMembers([]);
-      return;
-    }
+    if (mErr) { console.log('Load members error (memberships)', mErr); setMembers([]); return; }
     const userIds = Array.from(new Set((mems ?? []).map((r: any) => r.user_id).filter(Boolean)));
-    if (userIds.length === 0) {
-      setMembers([]);
-      return;
-    }
-    const { data: profs, error: pErr } = await supabase
-      .from('profiles')
-      .select('user_id, full_name')
-      .in('user_id', userIds);
-    if (pErr) {
-      console.log('Load members error (profiles)', pErr);
-      setMembers(userIds.map(id => ({ id, name: 'Member' })));
-      return;
-    }
+    if (userIds.length === 0) { setMembers([]); return; }
+    const { data: profs, error: pErr } = await supabase.from('profiles').select('user_id, full_name').in('user_id', userIds);
+    if (pErr) { console.log('Load members error (profiles)', pErr); setMembers(userIds.map(id => ({ id, name: 'Member' }))); return; }
     const byId = new Map<string, string>();
     (profs ?? []).forEach((p: any) => byId.set(p.user_id, p.full_name || 'Member'));
     setMembers(userIds.map(id => ({ id, name: byId.get(id) || 'Member' })));
@@ -106,25 +95,13 @@ export default function CalendarView() {
       .select('id,title,due_at,completed')
       .gte('due_at', monthStart.toISOString())
       .lte('due_at', monthEnd.toISOString());
-    if (error) {
-      console.log('Load tasks error', error);
-      setTasks([]);
-      return;
-    }
+    if (error) { console.log('Load tasks error', error); setTasks([]); return; }
     setTasks(data ?? []);
   }, [monthStart, monthEnd]);
 
-  useEffect(() => {
-    loadHouseholds();
-    loadMembers();
-    loadTasks();
-  }, [loadHouseholds, loadMembers, loadTasks]);
+  useEffect(() => { loadHouseholds(); loadMembers(); loadTasks(); }, [loadHouseholds, loadMembers, loadTasks]);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadTasks();
-    }, [loadTasks])
-  );
+  useFocusEffect(useCallback(() => { loadTasks(); }, [loadTasks]));
 
   const events: CalendarEvent[] = useMemo(() => {
     const byDate: Record<string, { anyTitle?: string; hasPending: boolean }> = {};
@@ -142,45 +119,38 @@ export default function CalendarView() {
     }));
   }, [tasks]);
 
-  const onCreateTask = useCallback(
-    async (payload: {
-      title: string;
-      description?: string;
-      time12?: string;
-      dateYMD: string;
-      householdId: string;
-      assigneeId?: string | null;
-    }) => {
-      try {
-        const dateForTask = payload.dateYMD || todayYMD();  // <- guarantee date
-        if (!payload.householdId) {
-          Alert.alert('Select household', 'Please choose a household for this task.');
-          return;
-        }
-        const listId = await ensureTaskList(payload.householdId, dateForTask);
-        const dueISO = time12ToISO(dateForTask, payload.time12);
-
-        const { error } = await supabase.from('tasks').insert({
-          title: payload.title,
-          notes: payload.description ?? null,
-          household_id: payload.householdId,
-          list_id: listId,
-          assignee: payload.assigneeId ?? null, // or assignee_id if your column is named that
-          due_at: dueISO,
-          completed: false,
-        });
-        if (error) throw error;
-
-        await loadTasks();
-        // @ts-ignore
-        nav.navigate('Tasks');
-      } catch (e: any) {
-        console.log('Create task error', e);
-        Alert.alert('Could not save', e?.message ?? 'Save failed');
+  const onCreateTask = useCallback(async (payload: TaskSubmitPayload) => {
+    try {
+      const dateForTask = payload.dateYMD || todayYMD();
+      if (!payload.householdId) {
+        Alert.alert('Select household', 'Please choose a household for this task.');
+        return;
       }
-    },
-    [loadTasks, nav]
-  );
+      const listId = await ensureTaskList(payload.householdId, dateForTask);
+
+      const { hour, minute } = timeFromPayload(payload);
+      const dueISO = buildISO(dateForTask, hour, minute);
+
+      const { error } = await supabase.from('tasks').insert({
+        title: payload.title,
+        notes: payload.description ?? null,
+        household_id: payload.householdId,
+        list_id: listId,
+        assignee: payload.assigneeId ?? null,
+        due_at: dueISO,
+        completed: false,
+      });
+      if (error) throw error;
+
+      await loadTasks();
+      // ✅ use the captured nav instance (no hooks here)
+      // @ts-ignore
+      (nav as any)?.navigate?.('Tasks');
+    } catch (e: any) {
+      console.log('Create task error', e);
+      Alert.alert('Could not save', e?.message ?? 'Save failed');
+    }
+  }, [loadTasks, nav]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }} edges={['top', 'left', 'right']}>

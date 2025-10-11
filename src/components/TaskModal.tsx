@@ -1,4 +1,3 @@
-// src/components/TaskModal.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Modal,
@@ -24,11 +23,12 @@ export type TaskSubmitPayload = {
   timeHHmm?: string | null;    // e.g. "15:30"
   householdId?: string | null;
   assigneeId?: string | null;
+  dateYMD: string;             // 👈 REQUIRED: YYYY-MM-DD from Calendar
 };
 
 type Props = {
   visible: boolean;
-  dateYMD?: string | null;        // optional context label
+  dateYMD: string;             // 👈 we receive it from Calendar for context + submit
   members?: Member[];
   households?: Household[];
   onClose: () => void;
@@ -79,7 +79,7 @@ export default React.memo(function TaskModal({
   const memberList = useMemo(() => members, [members]);
   const householdList = useMemo(() => households, [households]);
 
-  // form state (lives inside the modal, so typing never flickers)
+  // form state (lives inside the modal)
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
 
@@ -115,10 +115,11 @@ export default React.memo(function TaskModal({
       timeHHmm: toHHmm(time),
       householdId,
       assigneeId,
+      dateYMD, // 👈 pass the selected calendar day through
     };
     await onSubmit(payload);
     onClose();
-  }, [title, description, time, householdId, assigneeId, onSubmit, onClose]);
+  }, [title, description, time, householdId, assigneeId, dateYMD, onSubmit, onClose]);
 
   // Android’s picker is a one-shot dialog; iOS can be inline/spinner
   const onChange: IOSNativeProps['onChange'] & AndroidNativeProps['onChange'] = (_, selectedDate) => {

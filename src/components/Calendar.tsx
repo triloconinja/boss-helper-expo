@@ -46,7 +46,7 @@ type GridItem =
   | { type: 'spacer'; key: string }
   | { type: 'day'; key: string; date: number; fill: 'none' | 'blue' | 'lime'; sub?: string };
 
-const COLS = 7;
+const COLS = 7; // ✅ keep only this declaration
 
 /* ---------- Day cell (memo) ---------- */
 const DayCell = React.memo(function DayCell({
@@ -136,7 +136,7 @@ export default function Calendar({
       }
       items.push({ type: 'day', key, date: d, fill, sub });
     }
-    // pad tail so last row completes 7 columns (prevents uneven last row hit areas)
+    // pad tail
     const remainder = items.length % COLS;
     if (remainder !== 0) {
       const pad = COLS - remainder;
@@ -158,13 +158,12 @@ export default function Calendar({
 
   const openTaskForDay = useCallback((dateYMD: string) => {
     setSelectedDateYMD(dateYMD);
-    // Defer opening until current interactions finish – snappy taps
     requestAnimationFrame(() => setTaskModalOpen(true));
   }, []);
 
   const handleCreateTask = useCallback(async (payload: TaskSubmitPayload) => {
-    await onCreateTask(payload);
-  }, [onCreateTask]);
+    await onCreateTask({ ...payload, dateYMD: payload.dateYMD ?? selectedDateYMD });
+  }, [onCreateTask, selectedDateYMD]);
 
   const renderItem = useCallback(
     ({ item }: ListRenderItemInfo<GridItem>) => {
@@ -270,7 +269,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 10,
     justifyContent: 'space-between',
+    backgroundColor: '#1A1E23',
+    borderColor: '#2E3338',
   },
-  num: { fontFamily: 'Montserrat_700Bold', fontSize: 12, letterSpacing: 0.1 },
-  sub: { fontFamily: 'Montserrat_500Medium', fontSize: 10 },
+  num: { fontFamily: 'Montserrat_700Bold', fontSize: 12, letterSpacing: 0.1, color: '#fff' },
+  sub: { fontFamily: 'Montserrat_500Medium', fontSize: 10, color: '#AAB2B9' },
 });
